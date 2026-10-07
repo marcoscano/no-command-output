@@ -1,0 +1,3 @@
+# Written by Claude Code when it loads the plugin: the engine's API types for
+# the editor and tsc. Regenerated on every load, never committed.
+.claude-plugin/types/

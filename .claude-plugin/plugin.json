@@ -1,0 +1,20 @@
+{
+  "name": "no-command-output",
+  "version": "0.2.0",
+  "description": "Hide tool output in the transcript, toggled with /no-command-output",
+  "author": {
+    "name": "Marcos Cano"
+  },
+  "homepage": "https://github.com/marcoscano/no-command-output",
+  "repository": "https://github.com/marcoscano/no-command-output",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "hiddenByDefault": {
+      "type": "boolean",
+      "title": "Hide tool output by default",
+      "description": "Start every session with tool output hidden",
+      "default": true
+    }
+  }
+}

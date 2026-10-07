@@ -1,0 +1,14 @@
+{
+  "name": "marcoscano",
+  "owner": {
+    "name": "Marcos Cano"
+  },
+  "description": "Marcos Cano's Claude Code plugins",
+  "plugins": [
+    {
+      "name": "no-command-output",
+      "source": "./",
+      "description": "Hide tool output in the Claude Code transcript, toggled with /no-command-output"
+    }
+  ]
+}

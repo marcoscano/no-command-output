@@ -4,6 +4,9 @@ A Claude Code plugin that hides tool output in the transcript, so you see which
 commands ran and which files were touched without the noise of their results.
 Toggle it with `/no-command-output`.
 
+<img src="docs/no-command-output-screenshot.png" alt="Screenshot of a Claude Code session explaining how no-command-output behaves" width="820">
+
+
 - Every finished tool row shows a one-line placeholder, `output hidden (12 lines)`,
   instead of its output. The command or file in the row's header still shows.
 - Click the placeholder to expand that row in place, exactly as Claude Code

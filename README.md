@@ -6,6 +6,11 @@ Toggle it with `/no-command-output`.
 
 - Every finished tool row shows a one-line placeholder, `output hidden (12 lines)`,
   instead of its output. The command or file in the row's header still shows.
+- Click the placeholder to expand that row in place, exactly as Claude Code
+  draws it; click `hide output` under it to fold it again. Clicks reach rows in
+  the fullscreen renderer (`/tui fullscreen`), where the transcript stays live;
+  the default renderer prints finished rows to scrollback, where nothing is
+  clickable.
 - Failed, interrupted and still-running calls are left alone: the error is what
   you want to read.
 - Works in the default and fullscreen (`/tui`) renderers, with and without
@@ -34,6 +39,7 @@ one option. The plugin is active in that session and in every session after.
 | `/no-command-output off` (or `show`) | Show output |
 
 The session's toggle wins over the `/config` default until the session ends.
+A row you expanded stays expanded for the session, whatever the mode.
 
 ## How it works
 
@@ -42,13 +48,17 @@ The plugin is a hooks module (`hooks/register.tsx`) with two `ui.render` hooks:
 - `ToolResult`, the result block under a standalone row, is replaced by the
   placeholder for any tool.
 - `ToolUse`, the row itself, draws its result inline in expanded groups and in
-  the fullscreen renderer. A Bash row keeps the engine's own header with its
-  `stdout` rewritten to the placeholder. Any other tool gets a row drawn by the
-  plugin (`⏺ Read(path)` and the placeholder), because a rewritten result has to
-  fit that tool's own output schema.
+  the fullscreen renderer. While folded, the plugin draws the row (`⏺ Read(path)`
+  and the placeholder, a plain dim `Button`). Once expanded it nests the
+  engine's own drawing of the row (`next(e)`, header and full output) under a
+  `hide output` button, so an expanded row looks exactly as it does without the
+  plugin.
+- `ToolResult` stays empty while its row drew the placeholder, which keeps a
+  standalone row in the default renderer from showing it twice.
 
-The mode lives in `$.state` for the session; the manifest's `hiddenByDefault`
-option (`.claude-plugin/plugin.json`) applies until the session toggles it.
+The mode lives in `$.state` for the session, and each expanded row in a
+`StateFamily` keyed by the call's id; the manifest's `hiddenByDefault` option
+(`.claude-plugin/plugin.json`) applies until the session toggles it.
 
 ## Development
 

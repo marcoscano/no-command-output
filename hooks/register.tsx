@@ -5,6 +5,7 @@ const STATUS = 'tool output hidden'
 // $.state is reached directly ($.state.get / $.state.set), never through an
 // imported helper: the module loader follows `$` only within this file.
 const IS_HIDDEN = { plugin: 'no-command-output', key: 'isHidden' } as const
+const IS_SHOWN = { plugin: 'no-command-output', key: 'isShown' } as const
 
 /** The input fields a row's one-line summary prefers, in order. */
 const SUMMARY_KEYS = [
@@ -21,7 +22,6 @@ const SUMMARY_KEYS = [
 ] as const
 const SUMMARY_WIDTH = 100
 
-type BashOutput = { stdout: string; stderr: string; interrupted: boolean }
 type ToolUseProps = RenderPropsOf['ToolUse']
 
 /** Counts the lines of a text, one trailing newline not counted as a line. */
@@ -30,10 +30,6 @@ const linesOf = (text: string): number =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
-
-/** True for the record Bash resolves: `{ stdout, stderr, interrupted }`. */
-const isBashOutput = (output: unknown): output is BashOutput =>
-  isRecord(output) && typeof output.stdout === 'string' && typeof output.stderr === 'string'
 
 /** Describes how much a result holds, for the placeholder line. */
 const sizeOf = (output: unknown): string => {
@@ -115,6 +111,11 @@ export const register: Register = (on, options) => {
   // toggle writes $.state; a reload keeps that state, a new session starts over.
   const hidden_by_default = options.hiddenByDefault !== false
 
+  // The calls whose ToolUse row this module drew itself. A standalone row in
+  // the default renderer draws its result in a separate ToolResult block, which
+  // then has nothing to add; a reload empties the set and the next redraw refills it.
+  const rows_drawn = new Set<string>()
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: COMMAND,
@@ -141,40 +142,43 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // A standalone tool row draws its result in its own ToolResult block.
-  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    // A failed call keeps its output: the error is what you want to read.
-    if (e.props.isErrored) return next(e)
-    // Reading while drawing subscribes this row: a later set redraws it.
-    const { value } = await $.state.get(IS_HIDDEN)
-    if (!(value ?? hidden_by_default)) return next(e)
-
-    const { Text } = $.ui.resolve(e)
-
-    return <Text dimColor>⎿  {placeholder(e.props.output)}</Text>
-  })
-
-  // A row inside an expanded tool group (every group under `verbose`) and every
-  // row of the fullscreen transcript draws its output inline from the ToolUse
-  // props, so the rewrite happens here.
+  // A tool call's row. In the fullscreen renderer, and inside an expanded group
+  // (every group under `verbose`), the row draws its result inline, so this is
+  // where the output is hidden: the header is drawn here with a pressable
+  // placeholder, and once pressed the engine's own row (header and full output)
+  // is nested under a control that folds it again.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
     if (!isHideable(e.props)) return next(e)
+    // Reading while drawing subscribes this row: a later set redraws it.
     const { value } = await $.state.get(IS_HIDDEN)
-    if (!(value ?? hidden_by_default)) return next(e)
-
-    const { tool, input, output } = e.props
-    // Bash's record keeps its shape with the placeholder as its stdout, which
-    // the engine then draws under its own header as the one line of output.
-    if (isBashOutput(output)) {
-      return next({
-        ...e,
-        props: { ...e.props, output: { ...output, stdout: placeholder(output), stderr: '' } },
-      })
+    if (!(value ?? hidden_by_default)) {
+      rows_drawn.delete(e.props.tool_use_id)
+      return next(e)
     }
 
-    // Any other tool's result has a schema of its own that a rewrite must fit,
-    // so the row is drawn here instead: the call's header and the placeholder.
-    const { Box, Text } = $.ui.resolve(e)
+    const { tool, input, output, tool_use_id } = e.props
+    const shown_ref = { ...IS_SHOWN, id: tool_use_id }
+    const { value: shown = false } = await $.state.get(shown_ref)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    rows_drawn.add(tool_use_id)
+
+    if (shown) {
+      const row = await next(e)
+
+      return (
+        <Box flexDirection="column">
+          {row}
+          <Button
+            plain
+            dimColor
+            key="hide"
+            label="  ⎿  hide output"
+            onPress={() => $.state.set(shown_ref, false)}
+          />
+        </Box>
+      )
+    }
+
     const summary = summaryOf(input)
 
     return (
@@ -183,8 +187,60 @@ export const register: Register = (on, options) => {
           <Text color="success">⏺</Text> <Text bold>{tool}</Text>
           {summary ? `(${summary})` : ''}
         </Text>
-        <Text dimColor>  ⎿  {placeholder(output)}</Text>
+        <Button
+          plain
+          dimColor
+          key="show"
+          label={`  ⎿  ${placeholder(output)}`}
+          onPress={() => $.state.set(shown_ref, true)}
+        />
       </Box>
+    )
+  })
+
+  // The result block under a standalone row in the default renderer. Its row
+  // already drew the placeholder (or, expanded, the engine's own row), so the
+  // block draws nothing while folded and the engine's result once expanded; a
+  // block whose row this module did not draw gets the placeholder itself.
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    // A failed call keeps its output: the error is what you want to read.
+    if (e.props.isErrored) return next(e)
+    const { value } = await $.state.get(IS_HIDDEN)
+    if (!(value ?? hidden_by_default)) return next(e)
+
+    const { tool_use_id, output } = e.props
+    const shown_ref = { ...IS_SHOWN, id: tool_use_id }
+    const { value: shown = false } = await $.state.get(shown_ref)
+    const { Box, Button } = $.ui.resolve(e)
+
+    if (rows_drawn.has(tool_use_id)) {
+      return shown ? next(e) : <Box />
+    }
+    if (shown) {
+      const block = await next(e)
+
+      return (
+        <Box flexDirection="column">
+          {block}
+          <Button
+            plain
+            dimColor
+            key="hide"
+            label="⎿  hide output"
+            onPress={() => $.state.set(shown_ref, false)}
+          />
+        </Box>
+      )
+    }
+
+    return (
+      <Button
+        plain
+        dimColor
+        key="show"
+        label={`⎿  ${placeholder(output)}`}
+        onPress={() => $.state.set(shown_ref, true)}
+      />
     )
   })
 }

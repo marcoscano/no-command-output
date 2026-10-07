@@ -11,7 +11,7 @@ const RUN = {
 const SURFACES = ['terminal', 'desktop'] as const
 const OUTPUT = { stdout: 'one\ntwo\nthree\n', stderr: '', interrupted: false }
 const RESULT: RenderPropsOf['ToolResult'] = {
-  tool_use_id: 'call-1',
+  tool_use_id: 'result-1',
   tool: 'Bash',
   output: OUTPUT,
   isErrored: false,
@@ -19,7 +19,7 @@ const RESULT: RenderPropsOf['ToolResult'] = {
 const BASH_ROW: RenderPropsOf['ToolUse'] = {
   tool_use_id: 'call-1',
   tool: 'Bash',
-  input: { command: 'ls' },
+  input: { command: 'ls -la' },
   isRunning: false,
   isErrored: false,
   isInterrupted: false,
@@ -38,21 +38,25 @@ const READ_ROW: RenderPropsOf['ToolUse'] = {
   },
 }
 const ENGINE = { type: 'Text', text: 'engine drew it' }
-const HIDDEN = { type: 'Text', text: /output hidden/ }
+const SHOW = { key: 'show' }
+const HIDE = { key: 'hide' }
 
-test('hides tool results from the start and shows them once turned off', async ($, on) => {
-  // Stands for the engine's own result renderer beneath the plugin.
-  on('ui.render', { component: 'ToolResult' }, ($, e) => {
+/** Stands for the engine's own renderer beneath the plugin, at either site. */
+const engineDraws = (on: Parameters<Parameters<typeof test>[1]>[1], component: 'ToolUse' | 'ToolResult') =>
+  on('ui.render', { component }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine drew it</Text>
   })
+
+test('hides a standalone result from the start and shows it once turned off', async ($, on) => {
+  engineDraws(on, 'ToolResult')
 
   for (const surface of SURFACES) {
     await $.command.run({ ...RUN, args: 'on' })
 
     const hidden = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolResult', props: RESULT })
     expect(await hidden.find(ENGINE), `${surface}: hidden by default`).toBeUndefined()
-    expect((await hidden.find(HIDDEN))?.text).toContain('3 lines')
+    expect((await hidden.find(SHOW))?.text, `${surface}: the placeholder is a control`).toContain('3 lines')
     await hidden.unmount()
 
     const errored = await $.ui.mount({
@@ -73,18 +77,11 @@ test('hides tool results from the start and shows them once turned off', async (
 
     const turnedOn = await $.command.run(RUN)
     expect(turnedOn.text).toContain('hidden')
-
-    const again = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolResult', props: RESULT })
-    expect(await again.find(ENGINE), `${surface}: hidden again once toggled`).toBeUndefined()
-    await again.unmount()
   }
 })
 
 test('starts with output shown when hiddenByDefault is off', { options: { hiddenByDefault: false } }, async ($, on) => {
-  on('ui.render', { component: 'ToolResult' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text>engine drew it</Text>
-  })
+  engineDraws(on, 'ToolResult')
 
   for (const surface of SURFACES) {
     const shown = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolResult', props: RESULT })
@@ -100,77 +97,69 @@ test('starts with output shown when hiddenByDefault is off', { options: { hidden
   await hidden.unmount()
 })
 
-test('rewrites the inline output of a Bash row while the mode is on', async ($, on) => {
-  // Stands for the engine's row renderer: it draws whatever stdout it is handed.
-  on('ui.render', { component: 'ToolUse' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    const output = e.props.output as { stdout?: string } | undefined
-    return <Text>{output?.stdout ?? 'engine drew it'}</Text>
-  })
+test('draws a pressable placeholder in a tool row and expands it in place', async ($, on) => {
+  engineDraws(on, 'ToolUse')
 
-  for (const surface of SURFACES) {
+  for (const [surface, row] of [['terminal', BASH_ROW], ['desktop', READ_ROW]] as const) {
     await $.command.run({ ...RUN, args: 'on' })
 
-    const hidden = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolUse', props: BASH_ROW })
-    expect(await hidden.find({ type: 'Text', text: /one/ }), `${surface}: stdout hidden by default`).toBeUndefined()
-    expect((await hidden.find(HIDDEN))?.text).toContain('3 lines')
-    await hidden.unmount()
+    const mounted = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolUse', props: row })
+    expect(await mounted.find(ENGINE), `${surface}: the engine's row is not drawn while folded`).toBeUndefined()
+    expect(await mounted.find({ type: 'Text', text: new RegExp(row.tool) }), `${surface}: the header names the tool`).toBeDefined()
+    const show = await mounted.find(SHOW)
+    expect(show?.text, `${surface}: the placeholder sizes the output`).toContain(row.tool === 'Bash' ? '3 lines' : '45 lines')
 
-    const errored = await $.ui.mount({
-      plugin: PLUGIN,
-      surface,
-      component: 'ToolUse',
-      props: { ...BASH_ROW, isErrored: true },
-    })
-    expect(await errored.find({ type: 'Text', text: /one/ }), `${surface}: errors stay visible`).toBeDefined()
+    // A press on the placeholder nests the engine's own row under a fold control.
+    await mounted.press({ plugin: PLUGIN, key: 'show' })
+    expect(await mounted.find(ENGINE), `${surface}: expanded rows draw the engine's row`).toBeDefined()
+    expect(await mounted.find(SHOW), `${surface}: the placeholder is gone once expanded`).toBeUndefined()
+    expect(await mounted.find(HIDE), `${surface}: expanded rows carry a fold control`).toBeDefined()
+
+    await mounted.press({ plugin: PLUGIN, key: 'hide' })
+    expect(await mounted.find(ENGINE), `${surface}: folded again`).toBeUndefined()
+    expect(await mounted.find(SHOW), `${surface}: the placeholder is back`).toBeDefined()
+    await mounted.unmount()
+
+    const errored = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolUse', props: { ...row, isErrored: true } })
+    expect(await errored.find(ENGINE), `${surface}: errors stay visible`).toBeDefined()
     await errored.unmount()
 
     const running = await $.ui.mount({
       plugin: PLUGIN,
       surface,
       component: 'ToolUse',
-      props: { ...BASH_ROW, isRunning: true, output: undefined },
+      props: { ...row, isRunning: true, output: undefined },
     })
     expect(await running.find(ENGINE), `${surface}: a running row is untouched`).toBeDefined()
     await running.unmount()
 
     await $.command.run({ ...RUN, args: 'off' })
 
-    const shown = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolUse', props: BASH_ROW })
-    expect(await shown.find({ type: 'Text', text: /one/ }), `${surface}: stdout shown once off`).toBeDefined()
+    const shown = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolUse', props: row })
+    expect(await shown.find(ENGINE), `${surface}: the engine's row once off`).toBeDefined()
     await shown.unmount()
   }
 })
 
-test('draws its own row for any other tool while the mode is on', async ($, on) => {
-  on('ui.render', { component: 'ToolUse' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text>engine drew it</Text>
+test('leaves the result block empty when the row already drew the placeholder', async ($, on) => {
+  engineDraws(on, 'ToolUse')
+  engineDraws(on, 'ToolResult')
+  await $.command.run({ ...RUN, args: 'on' })
+
+  const row = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'ToolUse', props: BASH_ROW })
+  const block = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'terminal',
+    component: 'ToolResult',
+    props: { ...RESULT, tool_use_id: BASH_ROW.tool_use_id },
   })
+  expect(await block.find(SHOW), 'no second placeholder under the row').toBeUndefined()
+  expect(await block.find(ENGINE), 'nothing drawn while folded').toBeUndefined()
 
-  for (const surface of SURFACES) {
-    await $.command.run({ ...RUN, args: 'on' })
+  // Expanding the row brings the engine's result block back.
+  await row.press({ plugin: PLUGIN, key: 'show' })
+  expect(await block.find(ENGINE), 'the engine draws the result once expanded').toBeDefined()
 
-    const hidden = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolUse', props: READ_ROW })
-    expect(await hidden.find(ENGINE), `${surface}: the engine's row is not drawn`).toBeUndefined()
-    expect(await hidden.find({ type: 'Text', text: /Read/ }), `${surface}: the header names the tool`).toBeDefined()
-    expect(await hidden.find({ type: 'Text', text: /common\.module/ }), `${surface}: the header names the file`).toBeDefined()
-    expect((await hidden.find(HIDDEN))?.text).toContain('45 lines')
-    await hidden.unmount()
-
-    const errored = await $.ui.mount({
-      plugin: PLUGIN,
-      surface,
-      component: 'ToolUse',
-      props: { ...READ_ROW, isErrored: true },
-    })
-    expect(await errored.find(ENGINE), `${surface}: errors stay visible`).toBeDefined()
-    await errored.unmount()
-
-    await $.command.run({ ...RUN, args: 'off' })
-
-    const shown = await $.ui.mount({ plugin: PLUGIN, surface, component: 'ToolUse', props: READ_ROW })
-    expect(await shown.find(ENGINE), `${surface}: the engine's row once off`).toBeDefined()
-    await shown.unmount()
-  }
+  await block.unmount()
+  await row.unmount()
 })

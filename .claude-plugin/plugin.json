@@ -1,6 +1,6 @@
 {
   "name": "no-command-output",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hide tool output in the transcript, toggled with /no-command-output",
   "author": {
     "name": "Marcos Cano"
